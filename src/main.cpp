@@ -9,17 +9,19 @@
 #include <ESP32Servo.h>
 #include <TickTwo.h>
 #include <sqlite3.h>
+#include "sounds.h"
 
-#define SOUND_PATH "/sound"
+#define SOUND_FOLDER_PATH "/sound"
 #define DATABASE_PATH "/sd/database.db"
 
-AudioSourceSD source(SOUND_PATH, "mp3", PIN_AUDIO_KIT_SD_CARD_CS);
+AudioSourceSD source(SOUND_FOLDER_PATH, "mp3", PIN_AUDIO_KIT_SD_CARD_CS);
 AudioKitStream kit;
 MP3DecoderHelix decoder;
 AudioPlayer player(source, kit, decoder);
 
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
+IPAddress subnet(255, 255, 255, 0);
 DNSServer dnsServer;
 
 RTC_DS3231 rtc;
@@ -30,6 +32,7 @@ uint16_t timeInput, timeLabel;
 sqlite3 *db;
 sqlite3_stmt *res;
 
+void playSound(const String sound);
 void getTimeCallback(Control *sender, int type);
 void syncTimeCallback(Control *sender, int type);
 void updateTimeLabel();
@@ -50,12 +53,8 @@ void setup()
 
   player.setVolume(1.0);
 
-  // select file with setPath() or setIndex()
-  // player.setPath("/ZZ Top/Unknown Album/Lowrider.mp3");
-  // player.setIndex(1); // 2nd file
-
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(apIP, apIP, subnet);
   WiFi.softAP("PIGGY BANK");
   dnsServer.start(DNS_PORT, "*", apIP);
 
@@ -78,9 +77,12 @@ void setup()
   timeLabel = ESPUI.label("Date & Time", ControlColor::Sunflower, "");
   timeInput = ESPUI.addControl(Time, "", "", None, 0, getTimeCallback);
   ESPUI.addControl(Button, "Update time", "Sync with device", None, timeLabel, syncTimeCallback);
+
   ESPUI.begin("PIGGY BANK");
 
   timeLabelUpdater.start();
+
+  playSound(sounds[HORN]);
 }
 
 void loop()
@@ -89,6 +91,13 @@ void loop()
   kit.processActions();
   player.copy();
   timeLabelUpdater.update();
+}
+
+void playSound(const String sound)
+{
+  String path = String(SOUND_FOLDER_PATH) + "/" + sound;
+  player.setPath(path.c_str());
+  player.play();
 }
 
 void updateTimeLabel()
