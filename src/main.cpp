@@ -10,16 +10,18 @@
 #include <TickTwo.h>
 #include <sqlite3.h>
 
+#define MAX_FILES 32
+#define MAX_FILE_PATH_LENGTH 128
 #define COIN_SOUND_FOLDER_PATH "/sound/coin"
 #define DATABASE_PATH "/sd/database.db"
-#define MAX_FILES 32
+
+byte coinPulses = 0;
+float coinValues[] = {2, 1.0, 0.50, 0.20, 0.10};
 
 AudioSourceSD source(COIN_SOUND_FOLDER_PATH, "mp3", PIN_AUDIO_KIT_SD_CARD_CS);
 AudioKitStream kit;
 MP3DecoderHelix decoder;
 AudioPlayer player(source, kit, decoder);
-
-byte coinPulses = 0;
 
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
@@ -31,23 +33,49 @@ ESP32Time espRTC(3600);
 
 uint16_t timeInput, timeLabel;
 
-sqlite3 *db;
-sqlite3_stmt *res;
-
 void IRAM_ATTR coinInterrupt();
 void coinDetected(int coin);
-void loadFiles(const char *path, char *files[], int &count);
+int loadFiles(const char *path, char *files[], int &count);
 void playCoinSound(int coin);
 void getTimeCallback(Control *sender, int type);
 void syncTimeCallback(Control *sender, int type);
 void updateTimeLabel();
 
 TickTwo timeLabelUpdater(updateTimeLabel, 1000, 0, MILLIS);
-
 TickTwo pulsesWatchdog([]
                        {coinDetected(coinPulses); 
                         coinPulses = 0; },
                        150, 1, MILLIS);
+
+sqlite3 *db;
+sqlite3_stmt *res;
+const char *data = "Callback function called";
+char *zErrMsg = 0;
+char sql[256];
+
+static int callback(void *data, int argc, char **argv, char **azColName)
+{
+  int i;
+  Serial.printf("%s: ", (const char *)data);
+  for (i = 0; i < argc; i++)
+  {
+    Serial.printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
+  }
+  Serial.printf("\n");
+  return 0;
+}
+
+int db_exec(sqlite3 *db, const char *sql)
+{
+  Serial.printf("SQL query: %s\n", sql);
+  int rc = sqlite3_exec(db, sql, callback, (void *)data, &zErrMsg);
+  if (rc != SQLITE_OK)
+  {
+    Serial.printf("SQL error: %s\n", zErrMsg);
+    sqlite3_free(zErrMsg);
+  }
+  return rc;
+}
 
 void setup()
 {
@@ -119,23 +147,24 @@ void IRAM_ATTR coinInterrupt()
 
 void coinDetected(int coin)
 {
-  Serial.print("Detected coin: ");
-  Serial.println(coin);
+  Serial.printf("Detected coin: %d\n", coin);
+
   playCoinSound(coin);
+
+  float amount = coinValues[coin - 1];
+  const char *date = espRTC.getTime("%Y-%m-%d %H:%M:%S").c_str();
+  sprintf(sql, "INSERT INTO donations (amount, time) VALUES( %f, \'%s\');", amount, date);
+  db_exec(db, sql);
 }
 
-void loadFiles(const char *path, char *files[], int &count)
+int loadFiles(const char *path, char *files[], int &count)
 {
   File directory = SD.open(path);
 
   if (!directory.isDirectory())
-  {
-    Serial.printf("Path %s does not exist\n", path);
-    return;
-  }
+    return -1;
 
   count = 0;
-
   while (File entry = directory.openNextFile())
   {
     if (!entry.isDirectory())
@@ -149,27 +178,30 @@ void loadFiles(const char *path, char *files[], int &count)
     entry.close();
   }
   directory.close();
+  return 0;
 }
 
 void playCoinSound(int coin)
 {
-  char path[256];
-  sprintf(path, "%s/%d", COIN_SOUND_FOLDER_PATH, coin);
-
+  char path[MAX_FILE_PATH_LENGTH];
   char *files[MAX_FILES];
   int count = 0;
-  loadFiles(path, files, count);
+
+  sprintf(path, "%s/%d", COIN_SOUND_FOLDER_PATH, coin);
+  if (loadFiles(path, files, count))
+  {
+    Serial.printf("Path is not a directory: %s\n", path);
+    return;
+  }
 
   for (int i = 0; i < count; i++)
     Serial.printf("%d. %s\n", i, files[i]);
 
   player.setPath(files[rand() % count]);
   player.play();
-}
 
-void updateTimeLabel()
-{
-  ESPUI.updateLabel(timeLabel, espRTC.getTimeDate());
+  for (int i = 0; i < count; i++)
+    free(files[i]);
 }
 
 void getTimeCallback(Control *sender, int type)
@@ -192,4 +224,9 @@ void syncTimeCallback(Control *sender, int type)
   {
     ESPUI.updateTime(timeInput);
   }
+}
+
+void updateTimeLabel()
+{
+  ESPUI.updateLabel(timeLabel, espRTC.getTimeDate());
 }
