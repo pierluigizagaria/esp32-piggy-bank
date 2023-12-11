@@ -2,7 +2,7 @@
 #include <AudioLibs/AudioKit.h>
 #include <AudioLibs/AudioSourceSD.h>
 #include <AudioCodecs/CodecMP3Helix.h>
-#include <DNSServer.h>
+#include <DNSServerAsync.h>
 #include <ESPUI.h>
 #include <RTClib.h>
 #include <ESP32Time.h>
@@ -34,7 +34,7 @@ DNSServer dnsServer;
 RTC_DS3231 rtc;
 ESP32Time espRTC(3600);
 
-uint16_t timeInput, timeLabel;
+uint16_t timeInput, timeLabel, graph;
 
 void IRAM_ATTR coinInterrupt();
 void checkCoinSignalEnd();
@@ -119,12 +119,16 @@ void setup()
     Serial.printf("Can't open database: %s\n", sqlite3_errmsg(db));
   }
 
-  timeLabel = ESPUI.label("Date & Time", ControlColor::Sunflower, "");
   timeInput = ESPUI.addControl(Time, "", "", None, 0, getTimeCallback);
-  ESPUI.addControl(Button, "Update time", "Sync with device", None, timeLabel, syncTimeCallback);
-  ESPUI.begin("PIGGY BANK");
+  uint16_t homeTab = ESPUI.addControl(ControlType::Tab, "Home", "Home");
+  uint16_t settingsTab = ESPUI.addControl(ControlType::Tab, "Settings", "Settings");
+  timeLabel = ESPUI.addControl(ControlType::Label, "Date & Time", "Date & Time", ControlColor::Sunflower, settingsTab);
+  ESPUI.addControl(ControlType::Button, "Update time", "Sync with device", None, timeLabel, syncTimeCallback);
+  graph = ESPUI.addControl(ControlType::Graph, "Donations", "Donations", ControlColor::Turquoise, homeTab);
 
+  ESPUI.begin("PIGGY BANK");
   timeLabelUpdater.start();
+
   srand(espRTC.getLocalEpoch());
 
   playCoinSound(1);
@@ -132,7 +136,6 @@ void setup()
 
 void loop()
 {
-  dnsServer.processNextRequest();
   kit.processActions();
   player.copy();
   timeLabelUpdater.update();
