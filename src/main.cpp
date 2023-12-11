@@ -12,11 +12,14 @@
 
 #define MAX_FILES 32
 #define MAX_FILE_PATH_LENGTH 128
+#define MAX_COIN_TYPES 6
+#define COIN_SIGNAL_LENGTH 50
+#define COIN_SIGNAL_PAUSE_LENGTH 100
+
 #define COIN_SOUND_FOLDER_PATH "/sound/coin"
 #define DATABASE_PATH "/sd/database.db"
 
-byte coinPulses = 0;
-float coinValues[] = {2, 1.0, 0.50, 0.20, 0.10};
+float coinValues[MAX_COIN_TYPES] = {2, 1.0, 0.50, 0.20, 0.10, 0.05};
 
 AudioSourceSD source(COIN_SOUND_FOLDER_PATH, "mp3", PIN_AUDIO_KIT_SD_CARD_CS);
 AudioKitStream kit;
@@ -34,18 +37,15 @@ ESP32Time espRTC(3600);
 uint16_t timeInput, timeLabel;
 
 void IRAM_ATTR coinInterrupt();
+void checkCoinSignalEnd();
 void coinDetected(int coin);
-int loadFiles(const char *path, char *files[], int &count);
+int loadFiles(const char *path, char files[MAX_FILES][MAX_FILE_PATH_LENGTH], int &count);
 void playCoinSound(int coin);
 void getTimeCallback(Control *sender, int type);
 void syncTimeCallback(Control *sender, int type);
 void updateTimeLabel();
 
 TickTwo timeLabelUpdater(updateTimeLabel, 1000, 0, MILLIS);
-TickTwo pulsesWatchdog([]
-                       {coinDetected(coinPulses); 
-                        coinPulses = 0; },
-                       150, 1, MILLIS);
 
 sqlite3 *db;
 sqlite3_stmt *res;
@@ -91,7 +91,7 @@ void setup()
   actions.setEnabled(PIN_KEY6, false);
 
   pinMode(PIN_KEY6, INPUT_PULLUP);
-  attachInterrupt(PIN_KEY6, coinInterrupt, RISING);
+  attachInterrupt(PIN_KEY6, coinInterrupt, CHANGE);
 
   SD.begin(PIN_AUDIO_KIT_SD_CARD_CS, AUDIOKIT_SD_SPI);
 
@@ -136,13 +136,33 @@ void loop()
   kit.processActions();
   player.copy();
   timeLabelUpdater.update();
-  pulsesWatchdog.update();
+  checkCoinSignalEnd();
 }
+
+byte coinPulses = 0;
+unsigned long lastLowSignal, lastHighSignal;
 
 void IRAM_ATTR coinInterrupt()
 {
+  int state = digitalRead(PIN_KEY6);
+  if (state == LOW)
+  {
+    lastLowSignal = millis();
+    return;
+  }
+  lastHighSignal = millis();
+  if (millis() - lastLowSignal != COIN_SIGNAL_LENGTH)
+    return;
   coinPulses++;
-  pulsesWatchdog.start();
+}
+
+void checkCoinSignalEnd()
+{
+  if ((coinPulses > 0) && (millis() - lastLowSignal > COIN_SIGNAL_LENGTH) && (millis() - lastHighSignal > COIN_SIGNAL_PAUSE_LENGTH))
+  {
+    coinDetected(coinPulses);
+    coinPulses = 0;
+  }
 }
 
 void coinDetected(int coin)
@@ -154,10 +174,11 @@ void coinDetected(int coin)
   float amount = coinValues[coin - 1];
   const char *date = espRTC.getTime("%Y-%m-%d %H:%M:%S").c_str();
   sprintf(sql, "INSERT INTO donations (amount, time) VALUES( %f, \'%s\');", amount, date);
+
   db_exec(db, sql);
 }
 
-int loadFiles(const char *path, char *files[], int &count)
+int loadFiles(const char *path, char files[MAX_FILES][MAX_FILE_PATH_LENGTH], int &count)
 {
   File directory = SD.open(path);
 
@@ -171,7 +192,7 @@ int loadFiles(const char *path, char *files[], int &count)
     {
       if (count < MAX_FILES)
       {
-        files[count] = strdup(entry.path());
+        strcpy(files[count], entry.path());
         count++;
       }
     }
@@ -184,24 +205,18 @@ int loadFiles(const char *path, char *files[], int &count)
 void playCoinSound(int coin)
 {
   char path[MAX_FILE_PATH_LENGTH];
-  char *files[MAX_FILES];
+  char files[MAX_FILES][MAX_FILE_PATH_LENGTH];
   int count = 0;
 
   sprintf(path, "%s/%d", COIN_SOUND_FOLDER_PATH, coin);
   if (loadFiles(path, files, count))
-  {
-    Serial.printf("Path is not a directory: %s\n", path);
     return;
-  }
 
   for (int i = 0; i < count; i++)
     Serial.printf("%d. %s\n", i, files[i]);
 
   player.setPath(files[rand() % count]);
   player.play();
-
-  for (int i = 0; i < count; i++)
-    free(files[i]);
 }
 
 void getTimeCallback(Control *sender, int type)
