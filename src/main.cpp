@@ -3,10 +3,11 @@
 #include <AudioLibs/AudioSourceSD.h>
 #include <AudioCodecs/CodecMP3Helix.h>
 #include <DNSServerAsync.h>
-#include <ESPUI.h>
+#include <LittleFS.h>
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
 #include <RTClib.h>
 #include <ESP32Time.h>
-#include <ESP32Servo.h>
 #include <TickTwo.h>
 #include <sqlite3.h>
 
@@ -31,33 +32,99 @@ IPAddress apIP(192, 168, 4, 1);
 IPAddress subnet(255, 255, 255, 0);
 DNSServer dnsServer;
 
+AsyncWebServer web(80);
+AsyncWebSocket ws("/ws");
+
 RTC_DS3231 rtc;
 ESP32Time espRTC(3600);
 
-uint16_t timeInput, timeLabel, graph;
+class CaptiveRequestHandler : public AsyncWebHandler
+{
+public:
+  CaptiveRequestHandler() {}
+  virtual ~CaptiveRequestHandler() {}
 
-void IRAM_ATTR coinInterrupt();
-void checkCoinSignalEnd();
-void coinDetected(int coin);
-int loadFiles(const char *path, char files[MAX_FILES][MAX_FILE_PATH_LENGTH], int &count);
-void playCoinSound(int coin);
-void getTimeCallback(Control *sender, int type);
-void syncTimeCallback(Control *sender, int type);
-void updateTimeLabel();
+  bool canHandle(AsyncWebServerRequest *request)
+  {
+    return true;
+  }
 
-TickTwo timeLabelUpdater(updateTimeLabel, 1000, 0, MILLIS);
+  void handleRequest(AsyncWebServerRequest *request)
+  {
+    String url = request->url();
+    if (url == "/")
+      return request->send(LittleFS, "/index.html", "text/html");
+    if (LittleFS.exists(url))
+      return request->send(LittleFS, url);
+    if (SD.exists(url))
+      return request->send(SD, url);
+    request->redirect("/");
+  }
+};
 
+void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
+{
+  AwsFrameInfo *info = (AwsFrameInfo *)arg;
+  if (!(info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT))
+    return;
+
+  StaticJsonDocument<64> doc;
+  DeserializationError err = deserializeJson(doc, data);
+
+  if (err)
+  {
+    Serial.print(F("deserializeJson() failed with code "));
+    Serial.println(err.c_str());
+    return;
+  }
+
+  const char *type = doc["type"];
+  const char *message = doc["message"];
+
+  if (strcmp(type, "UpdateDateTime") == 0)
+  {
+    DateTime dt(message);
+    rtc.adjust(dt);
+    espRTC.setTime(rtc.now().unixtime());
+  }
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len)
+{
+  switch (type)
+  {
+  case WS_EVT_CONNECT:
+    Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+    break;
+  case WS_EVT_DISCONNECT:
+    Serial.printf("WebSocket client #%u disconnected\n", client->id());
+    break;
+  case WS_EVT_DATA:
+    handleWebSocketMessage(arg, data, len);
+    break;
+  case WS_EVT_PONG:
+  case WS_EVT_ERROR:
+    break;
+  }
+}
+
+void notifyCurrentDateTime()
+{
+  char data[128];
+  StaticJsonDocument<64> doc;
+  doc["type"] = "CurrentDateTime";
+  doc["message"] = espRTC.getTime("%d-%m-%Y %H:%M:%S");
+  size_t len = serializeJson(doc, data);
+  ws.textAll(data, len);
+}
+
+TickTwo notifyDateTimeTicker(notifyCurrentDateTime, 1000, 0, MILLIS);
 sqlite3 *db;
-sqlite3_stmt *res;
-const char *data = "Callback function called";
-char *zErrMsg = 0;
-char sql[256];
+char sql[512], *sqlError;
 
 static int callback(void *data, int argc, char **argv, char **azColName)
 {
-  int i;
-  Serial.printf("%s: ", (const char *)data);
-  for (i = 0; i < argc; i++)
+  for (int i = 0; i < argc; i++)
   {
     Serial.printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
   }
@@ -68,117 +135,13 @@ static int callback(void *data, int argc, char **argv, char **azColName)
 int db_exec(sqlite3 *db, const char *sql)
 {
   Serial.printf("SQL query: %s\n", sql);
-  int rc = sqlite3_exec(db, sql, callback, (void *)data, &zErrMsg);
+  int rc = sqlite3_exec(db, sql, callback, (void *)NULL, &sqlError);
   if (rc != SQLITE_OK)
   {
-    Serial.printf("SQL error: %s\n", zErrMsg);
-    sqlite3_free(zErrMsg);
+    Serial.printf("SQL error: %s\n", sqlError);
+    sqlite3_free(sqlError);
   }
   return rc;
-}
-
-void setup()
-{
-  Serial.begin(115200);
-  AudioLogger::instance().begin(Serial, AudioLogger::Info);
-  ESPUI.setVerbosity(Verbosity::Quiet);
-
-  auto cfg = kit.defaultConfig(TX_MODE);
-  cfg.sd_active = true;
-  kit.begin(cfg);
-
-  AudioActions &actions = kit.audioActions();
-  actions.setEnabled(PIN_KEY6, false);
-
-  pinMode(PIN_KEY6, INPUT_PULLUP);
-  attachInterrupt(PIN_KEY6, coinInterrupt, CHANGE);
-
-  SD.begin(PIN_AUDIO_KIT_SD_CARD_CS, AUDIOKIT_SD_SPI);
-
-  kit.setVolume(90);
-  player.setVolume(1.0);
-
-  Wire.setPins(22, 21);
-  if (!rtc.begin())
-  {
-    Serial.println("Could not find RTC module");
-  }
-  else
-  {
-    espRTC.setTime(rtc.now().unixtime());
-  }
-
-  WiFi.mode(WIFI_AP);
-  WiFi.softAPConfig(apIP, apIP, subnet);
-  WiFi.softAP("PIGGY BANK");
-  dnsServer.start(DNS_PORT, "*", apIP);
-
-  sqlite3_initialize();
-  if (sqlite3_open(DATABASE_PATH, &db) != SQLITE_OK)
-  {
-    Serial.printf("Can't open database: %s\n", sqlite3_errmsg(db));
-  }
-
-  timeInput = ESPUI.addControl(Time, "", "", None, 0, getTimeCallback);
-  uint16_t homeTab = ESPUI.addControl(ControlType::Tab, "Home", "Home");
-  uint16_t settingsTab = ESPUI.addControl(ControlType::Tab, "Settings", "Settings");
-  timeLabel = ESPUI.addControl(ControlType::Label, "Date & Time", "Date & Time", ControlColor::Sunflower, settingsTab);
-  ESPUI.addControl(ControlType::Button, "Update time", "Sync with device", None, timeLabel, syncTimeCallback);
-  graph = ESPUI.addControl(ControlType::Graph, "Donations", "Donations", ControlColor::Turquoise, homeTab);
-
-  ESPUI.begin("PIGGY BANK");
-  timeLabelUpdater.start();
-
-  srand(espRTC.getLocalEpoch());
-
-  playCoinSound(1);
-}
-
-void loop()
-{
-  kit.processActions();
-  player.copy();
-  timeLabelUpdater.update();
-  checkCoinSignalEnd();
-}
-
-byte coinPulses = 0;
-unsigned long lastLowSignal, lastHighSignal;
-
-void IRAM_ATTR coinInterrupt()
-{
-  int state = digitalRead(PIN_KEY6);
-  if (state == LOW)
-  {
-    lastLowSignal = millis();
-    return;
-  }
-  lastHighSignal = millis();
-  if (millis() - lastLowSignal != COIN_SIGNAL_LENGTH)
-    return;
-  coinPulses++;
-}
-
-void checkCoinSignalEnd()
-{
-  if ((coinPulses > 0) && (millis() - lastLowSignal > COIN_SIGNAL_LENGTH) && (millis() - lastHighSignal > COIN_SIGNAL_PAUSE_LENGTH))
-  {
-    coinDetected(coinPulses);
-    coinPulses = 0;
-  }
-}
-
-void coinDetected(int coin)
-{
-  Serial.printf("Detected coin: %d\n", coin);
-
-  playCoinSound(coin);
-
-  float amount = coinValues[coin - 1];
-  const char *date = espRTC.getTime("%Y-%m-%d %H:%M:%S").c_str();
-  sprintf(sql, "INSERT INTO donations (amount, time) VALUES( %f, \'%s\');", amount, date);
-
-  db_exec(db, sql);
 }
 
 int loadFiles(const char *path, char files[MAX_FILES][MAX_FILE_PATH_LENGTH], int &count)
@@ -222,29 +185,105 @@ void playCoinSound(int coin)
   player.play();
 }
 
-void getTimeCallback(Control *sender, int type)
+byte coinPulses = 0;
+unsigned long lastLowSignal, lastHighSignal;
+
+void IRAM_ATTR coinInterrupt()
 {
-  if (type == TM_VALUE)
+  int state = digitalRead(PIN_KEY6);
+  if (state == LOW)
   {
-    Serial.println("ISO time from device " + sender->value);
-    const char *ISO8601Time = sender->value.c_str();
+    lastLowSignal = millis();
+    return;
+  }
+  if (millis() - lastLowSignal != COIN_SIGNAL_LENGTH)
+    return;
+  lastHighSignal = millis();
+  coinPulses++;
+}
 
-    DateTime dt(ISO8601Time);
-    rtc.adjust(dt);
+void coinDetected(int coin)
+{
+  Serial.printf("Detected coin: %d\n", coin);
 
+  playCoinSound(coin);
+
+  float amount = coinValues[coin - 1];
+  const char *date = espRTC.getTime("%Y-%m-%d %H:%M:%S").c_str();
+  sprintf(sql, "INSERT INTO donations (amount, time) VALUES( %f, \'%s\');", amount, date);
+
+  db_exec(db, sql);
+}
+
+void checkCoinSignalEnd()
+{
+  if ((coinPulses > 0) && (millis() - lastLowSignal > COIN_SIGNAL_LENGTH) && (millis() - lastHighSignal > COIN_SIGNAL_PAUSE_LENGTH))
+  {
+    coinDetected(coinPulses);
+    coinPulses = 0;
+  }
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  Serial.setDebugOutput(true);
+  AudioLogger::instance().begin(Serial, AudioLogger::Info);
+
+  auto cfg = kit.defaultConfig(TX_MODE);
+  cfg.sd_active = true;
+  kit.begin(cfg);
+
+  AudioActions &actions = kit.audioActions();
+  actions.setEnabled(PIN_KEY6, false);
+
+  pinMode(PIN_KEY6, INPUT_PULLUP);
+  attachInterrupt(PIN_KEY6, coinInterrupt, CHANGE);
+
+  SD.begin(PIN_AUDIO_KIT_SD_CARD_CS, AUDIOKIT_SD_SPI);
+  LittleFS.begin();
+
+  kit.setVolume(90);
+  player.setVolume(1.0);
+
+  Wire.setPins(22, 21);
+  if (!rtc.begin())
+  {
+    Serial.println("Could not find RTC module");
+  }
+  else
+  {
     espRTC.setTime(rtc.now().unixtime());
   }
-}
 
-void syncTimeCallback(Control *sender, int type)
-{
-  if (type == B_DOWN)
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(apIP, apIP, subnet);
+  WiFi.softAP("PIGGY BANK");
+
+  dnsServer.start(DNS_PORT, "*", apIP);
+
+  ws.onEvent(onEvent);
+  web.addHandler(&ws).setFilter(ON_AP_FILTER);
+  web.addHandler(new CaptiveRequestHandler()).setFilter(ON_AP_FILTER);
+  web.begin();
+
+  sqlite3_initialize();
+  if (sqlite3_open(DATABASE_PATH, &db) != SQLITE_OK)
   {
-    ESPUI.updateTime(timeInput);
+    Serial.printf("Can't open database: %s\n", sqlite3_errmsg(db));
   }
+
+  srand(espRTC.getLocalEpoch());
+  playCoinSound(1);
+
+  notifyDateTimeTicker.start();
 }
 
-void updateTimeLabel()
+void loop()
 {
-  ESPUI.updateLabel(timeLabel, espRTC.getTimeDate());
+  kit.processActions();
+  player.copy();
+  ws.cleanupClients();
+  notifyDateTimeTicker.update();
+  checkCoinSignalEnd();
 }
