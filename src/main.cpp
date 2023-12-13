@@ -68,7 +68,7 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
   if (!(info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT))
     return;
 
-  StaticJsonDocument<64> doc;
+  StaticJsonDocument<JSON_OBJECT_SIZE(2)> doc;
   DeserializationError err = deserializeJson(doc, data);
 
   if (err)
@@ -111,7 +111,7 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
 void notifyCurrentDateTime()
 {
   char data[128];
-  StaticJsonDocument<64> doc;
+  StaticJsonDocument<JSON_OBJECT_SIZE(2)> doc;
   doc["type"] = "CurrentDateTime";
   doc["message"] = espRTC.getTime("%d-%m-%Y %H:%M:%S");
   size_t len = serializeJson(doc, data);

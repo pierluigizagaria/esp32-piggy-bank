@@ -1,0 +1,21 @@
+{
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"preview": "vite preview"
+	},
+	"dependencies": {
+		"@emotion/react": "^11.11.1",
+		"@emotion/styled": "^11.11.0",
+		"@mui/material": "^5.15.0",
+		"@mui/x-date-pickers": "^6.18.4",
+		"dayjs": "^1.11.10",
+		"preact": "^10.13.1"
+	},
+	"devDependencies": {
+		"@preact/preset-vite": "^2.5.0",
+		"vite": "^4.3.2"
+	}
+}
