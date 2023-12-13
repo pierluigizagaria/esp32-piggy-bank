@@ -15,17 +15,18 @@
 #define MAX_FILE_PATH_LENGTH 128
 #define MAX_COIN_TYPES 6
 #define COIN_SIGNAL_LENGTH 50
-#define COIN_SIGNAL_PAUSE_LENGTH 100
+#define COIN_SIGNAL_TOLLERANCE 5
+#define COIN_SIGNAL_PAUSE_LENGTH 100 + 10
 
 #define COIN_SOUND_FOLDER_PATH "/sound/coin"
 #define DATABASE_PATH "/sd/database.db"
 
 float coinValues[MAX_COIN_TYPES] = {2, 1.0, 0.50, 0.20, 0.10, 0.05};
 
-AudioSourceSD source(COIN_SOUND_FOLDER_PATH, "mp3", PIN_AUDIO_KIT_SD_CARD_CS);
 AudioKitStream kit;
-MP3DecoderHelix decoder;
-AudioPlayer player(source, kit, decoder);
+EncodedAudioStream decoder(&kit, new MP3DecoderHelix());
+StreamCopy copier;
+File audioFile;
 
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
@@ -181,8 +182,8 @@ void playCoinSound(int coin)
   for (int i = 0; i < count; i++)
     Serial.printf("%d. %s\n", i, files[i]);
 
-  player.setPath(files[rand() % count]);
-  player.play();
+  audioFile = SD.open(files[rand() % count]);
+  copier.begin(decoder, audioFile);
 }
 
 byte coinPulses = 0;
@@ -196,7 +197,8 @@ void IRAM_ATTR coinInterrupt()
     lastLowSignal = millis();
     return;
   }
-  if (millis() - lastLowSignal != COIN_SIGNAL_LENGTH)
+  unsigned long pulseLength = millis() - lastLowSignal;
+  if ((pulseLength > COIN_SIGNAL_LENGTH + COIN_SIGNAL_TOLLERANCE) || (pulseLength < COIN_SIGNAL_LENGTH - COIN_SIGNAL_TOLLERANCE))
     return;
   lastHighSignal = millis();
   coinPulses++;
@@ -227,11 +229,14 @@ void checkCoinSignalEnd()
 void setup()
 {
   Serial.begin(115200);
-  Serial.setDebugOutput(true);
   AudioLogger::instance().begin(Serial, AudioLogger::Info);
+
+  copier.setCheckAvailableForWrite(false);
+  decoder.begin();
 
   auto cfg = kit.defaultConfig(TX_MODE);
   cfg.sd_active = true;
+  kit.setVolume(100);
   kit.begin(cfg);
 
   AudioActions &actions = kit.audioActions();
@@ -242,9 +247,6 @@ void setup()
 
   SD.begin(PIN_AUDIO_KIT_SD_CARD_CS, AUDIOKIT_SD_SPI);
   LittleFS.begin();
-
-  kit.setVolume(90);
-  player.setVolume(1.0);
 
   Wire.setPins(22, 21);
   if (!rtc.begin())
@@ -282,7 +284,7 @@ void setup()
 void loop()
 {
   kit.processActions();
-  player.copy();
+  copier.copy();
   ws.cleanupClients();
   notifyDateTimeTicker.update();
   checkCoinSignalEnd();
