@@ -53,12 +53,25 @@ public:
   void handleRequest(AsyncWebServerRequest *request)
   {
     String url = request->url();
+
     if (url == "/")
       return request->send(LittleFS, "/index.html", "text/html");
-    if (LittleFS.exists(url))
-      return request->send(LittleFS, url);
-    if (SD.exists(url))
-      return request->send(SD, url);
+
+    if (LittleFS.exists(url) || SD.exists(url))
+    {
+      AsyncWebServerResponse *response;
+
+      if (LittleFS.exists(url))
+        response = request->beginResponse(LittleFS, url);
+      else
+        response = request->beginResponse(SD, url);
+
+      if (request->url().endsWith(".wasm"))
+        response->setContentType("application/wasm");
+
+      return request->send(response);
+    }
+
     request->redirect("/");
   }
 };
@@ -231,7 +244,6 @@ void setup()
   Serial.begin(115200);
   AudioLogger::instance().begin(Serial, AudioLogger::Info);
 
-  copier.setCheckAvailableForWrite(false);
   decoder.begin();
 
   auto cfg = kit.defaultConfig(TX_MODE);
