@@ -251,14 +251,14 @@ void setup()
   kit.setVolume(100);
   kit.begin(cfg);
 
+  SD.begin(PIN_AUDIO_KIT_SD_CARD_CS, AUDIOKIT_SD_SPI);
+  LittleFS.begin();
+
   AudioActions &actions = kit.audioActions();
   actions.setEnabled(PIN_KEY6, false);
 
   pinMode(PIN_KEY6, INPUT_PULLUP);
   attachInterrupt(PIN_KEY6, coinInterrupt, CHANGE);
-
-  SD.begin(PIN_AUDIO_KIT_SD_CARD_CS, AUDIOKIT_SD_SPI);
-  LittleFS.begin();
 
   Wire.setPins(22, 21);
   if (!rtc.begin())
@@ -281,11 +281,11 @@ void setup()
   web.addHandler(new CaptiveRequestHandler()).setFilter(ON_AP_FILTER);
   web.begin();
 
-  sqlite3_initialize();
-  if (sqlite3_open(DATABASE_PATH, &db) != SQLITE_OK)
-  {
-    Serial.printf("Can't open database: %s\n", sqlite3_errmsg(db));
-  }
+  // sqlite3_initialize();
+  // if (sqlite3_open(DATABASE_PATH, &db) != SQLITE_OK)
+  // {
+  //   Serial.printf("Can't open database: %s\n", sqlite3_errmsg(db));
+  // }
 
   srand(espRTC.getLocalEpoch());
   playCoinSound(1);

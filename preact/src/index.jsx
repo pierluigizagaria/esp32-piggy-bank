@@ -1,7 +1,11 @@
+// @ts-nocheck
 import { render } from "preact";
-import React, { useRef, useState, useEffect } from "preact/compat";
-import CssBaseline from "@mui/material/CssBaseline";
+import React, { useEffect, useMemo, useState } from "preact/compat";
+
 import dayjs from "dayjs";
+import initSqlJs from "sql.js";
+
+import CssBaseline from "@mui/material/CssBaseline";
 import Badge from "@mui/material/Badge";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
@@ -9,42 +13,24 @@ import { PickersDay } from "@mui/x-date-pickers/PickersDay";
 import { DateCalendar } from "@mui/x-date-pickers/DateCalendar";
 import { DayCalendarSkeleton } from "@mui/x-date-pickers/DayCalendarSkeleton";
 
-function getRandomNumber(min, max) {
-  return Math.round(Math.random() * (max - min) + min);
-}
-
-function fakeFetch(date, { signal }) {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      const daysInMonth = date.daysInMonth();
-      const daysToHighlight = [1, 2, 3].map(() =>
-        getRandomNumber(1, daysInMonth)
-      );
-
-      resolve({ daysToHighlight });
-    }, 500);
-
-    signal.onabort = () => {
-      clearTimeout(timeout);
-      reject(new DOMException("aborted", "AbortError"));
-    };
-  });
-}
-
-const initialValue = dayjs("2022-04-17");
-
-function ServerDay(props) {
-  const { highlightedDays = [], day, outsideCurrentMonth, ...other } = props;
-
+const DayWithDonation = ({
+  day,
+  outsideCurrentMonth,
+  donations = [],
+  ...other
+}) => {
   const isSelected =
-    !props.outsideCurrentMonth &&
-    highlightedDays.indexOf(props.day.date()) >= 0;
-
+    !outsideCurrentMonth &&
+    donations.find((donation) => dayjs(donation[2]).isSame(day, "day"));
   return (
     <Badge
-      key={props.day.toString()}
+      key={day.toString()}
       overlap="circular"
-      badgeContent={isSelected ? "🥮" : undefined}
+      anchorOrigin={{
+        vertical: "bottom",
+        horizontal: "right",
+      }}
+      badgeContent={isSelected ? "🟡" : undefined}
     >
       <PickersDay
         {...other}
@@ -53,71 +39,77 @@ function ServerDay(props) {
       />
     </Badge>
   );
-}
+};
 
-function DateCalendarServerRequest() {
-  const requestAbortController = useRef(null);
+const DonationCalendar = () => {
+  const [currentDay] = useState(dayjs());
+  const [selectedDay, setSelectedDay] = useState(dayjs());
   const [isLoading, setIsLoading] = useState(false);
-  const [highlightedDays, setHighlightedDays] = useState([1, 2, 15]);
+  const [db, setDb] = useState();
 
-  const fetchHighlightedDays = (date) => {
-    const controller = new AbortController();
-    fakeFetch(date, {
-      signal: controller.signal,
-    })
-      .then(({ daysToHighlight }) => {
-        setHighlightedDays(daysToHighlight);
-        setIsLoading(false);
-      })
-      .catch((error) => {
-        if (error.name !== "AbortError") {
-          throw error;
-        }
-      });
+  useEffect(() => initializeSqlite(), []);
 
-    requestAbortController.current = controller;
-  };
-
-  useEffect(() => {
-    fetchHighlightedDays(initialValue);
-    return () => requestAbortController.current?.abort();
-  }, []);
-
-  const handleMonthChange = (date) => {
-    if (requestAbortController.current) {
-      requestAbortController.current.abort();
-    }
-
+  const initializeSqlite = async () => {
     setIsLoading(true);
-    setHighlightedDays([]);
-    fetchHighlightedDays(date);
+    const initSqlite = initSqlJs({ locateFile: (file) => `/${file}` });
+    const fetchBuffer = fetch("/database.db").then((res) => res.arrayBuffer());
+    const [sqlite, buffer] = await Promise.all([initSqlite, fetchBuffer]);
+    const db = new sqlite.Database(new Uint8Array(buffer));
+    setDb(db);
   };
+
+  const fetchDonations = () => {
+    if (!db) return;
+    const [{ values }] = db.exec("SELECT * FROM donations");
+    setIsLoading(false);
+    return values;
+  };
+
+  const donations = useMemo(() => fetchDonations(), [db]);
+
+  const getMonthDonations = (donations, day) => {
+    return (
+      donations?.filter((donation) =>
+        dayjs(donation[2]).isSame(day, "month")
+      ) ?? []
+    );
+  };
+
+  const currentMonthDonations = useMemo(() => {
+    return getMonthDonations(donations, selectedDay).reduce(
+      (sum, a) => sum + a[1],
+      0
+    );
+  }, [donations, selectedDay]);
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <DateCalendar
-        defaultValue={initialValue}
+        readOnly
+        defaultValue={currentDay}
+        maxDate={currentDay}
         loading={isLoading}
-        onMonthChange={handleMonthChange}
+        onMonthChange={(day) => setSelectedDay(day)}
         renderLoading={() => <DayCalendarSkeleton />}
-        slots={{
-          day: ServerDay,
-        }}
-        slotProps={{
-          day: {
-            highlightedDays,
-          },
-        }}
+        slots={{ day: DayWithDonation }}
+        slotProps={{ day: { donations } }}
       />
+      {
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <span style={{ fontSize: 16 }}>
+            {`💰 ${currentMonthDonations.toFixed(2)}`}
+          </span>
+        </div>
+      }
     </LocalizationProvider>
   );
-}
+};
 
 export function App() {
   return (
     <React.Fragment>
       <CssBaseline enableColorScheme />
-      <DateCalendarServerRequest />
+      <DonationCalendar />
     </React.Fragment>
   );
 }
