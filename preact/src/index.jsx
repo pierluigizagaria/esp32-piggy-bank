@@ -47,7 +47,19 @@ const DonationCalendar = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [donations, setDonations] = useState([]);
 
+  useEffect(() => {
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    ws.onmessage = (event) => {
+      const { type, message } = JSON.parse(event.data);
+      if (type === "Notification" && message === "DONATION_RECEIVED") {
+        fetchDonations();
+      }
+    };
+    return () => ws.close();
+  }, []);
+
   const fetchDonations = () => {
+    setIsLoading(true);
     Papa.parse("donations.csv", {
       download: true,
       complete: ({ data }) => {
@@ -79,7 +91,7 @@ const DonationCalendar = () => {
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
         <span style={{ fontSize: 32 }}>
-          {`💰 ${currentMonthDonations.toFixed(2)}`}
+          {`💰 ${currentMonthDonations.toFixed(2)} €`}
         </span>
       </div>
       <DateCalendar

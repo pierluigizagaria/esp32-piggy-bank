@@ -123,6 +123,16 @@ void notifyCurrentDateTime()
   ws.textAll(data, len);
 }
 
+void notifyClients(const char *event)
+{
+  char data[128];
+  StaticJsonDocument<JSON_OBJECT_SIZE(2)> doc;
+  doc["type"] = "Notification";
+  doc["message"] = event;
+  size_t len = serializeJson(doc, data);
+  ws.textAll(data, len);
+}
+
 TickTwo notifyDateTimeTicker(notifyCurrentDateTime, 1000, 0, MILLIS);
 
 int loadFiles(const char *path, char files[MAX_FILES][MAX_FILE_PATH_LENGTH], int &count)
@@ -189,7 +199,7 @@ void saveDonation(int coin)
   File donationsFile = SD.open(DONATIONS_FILE, FILE_APPEND);
   if (!donationsFile)
     return;
-  donationsFile.printf("\n%f;%d;", coinValues[coin - 1], rtc.now().unixtime());
+  donationsFile.printf("%f;%d;\n", coinValues[coin - 1], rtc.now().unixtime());
   donationsFile.close();
 }
 
@@ -200,6 +210,7 @@ void checkCoinSignalEnd()
     Serial.printf("Detected coin: %d\n", coinPulses);
     playCoinSound(coinPulses);
     saveDonation(coinPulses);
+    notifyClients("DONATION_RECEIVED");
     coinPulses = 0;
   }
 }
@@ -260,7 +271,6 @@ void setup()
 
 void loop()
 {
-
   kit.processActions();
   ws.cleanupClients();
   printHeapStatusTicker.update();
