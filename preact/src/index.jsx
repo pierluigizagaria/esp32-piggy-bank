@@ -48,6 +48,7 @@ const DonationCalendar = () => {
   const [donations, setDonations] = useState([]);
 
   useEffect(() => {
+    fetchDonations();
     const ws = new WebSocket(`ws://${location.host}/ws`);
     ws.onmessage = (event) => {
       const { type, message } = JSON.parse(event.data);
@@ -70,8 +71,6 @@ const DonationCalendar = () => {
     });
   };
 
-  useEffect(() => fetchDonations(), []);
-
   const getMonthDonations = (donations, day) => {
     return (
       donations?.filter((donation) =>
@@ -91,7 +90,7 @@ const DonationCalendar = () => {
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
         <span style={{ fontSize: 32 }}>
-          {`💰 ${currentMonthDonations.toFixed(2)} €`}
+          {`💰 ${currentMonthDonations.toFixed(1)} €`}
         </span>
       </div>
       <DateCalendar
