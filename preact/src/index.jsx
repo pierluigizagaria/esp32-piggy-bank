@@ -3,7 +3,7 @@ import { render } from "preact";
 import React, { useEffect, useMemo, useState } from "preact/compat";
 
 import dayjs from "dayjs";
-import initSqlJs from "sql.js";
+import Papa from "papaparse";
 
 import CssBaseline from "@mui/material/CssBaseline";
 import Badge from "@mui/material/Badge";
@@ -21,7 +21,7 @@ const DayWithDonation = ({
 }) => {
   const isSelected =
     !outsideCurrentMonth &&
-    donations.find((donation) => dayjs(donation[2]).isSame(day, "day"));
+    donations.find((donation) => dayjs.unix(donation[1]).isSame(day, "day"));
   return (
     <Badge
       key={day.toString()}
@@ -44,46 +44,44 @@ const DayWithDonation = ({
 const DonationCalendar = () => {
   const [currentDay] = useState(dayjs());
   const [selectedDay, setSelectedDay] = useState(dayjs());
-  const [isLoading, setIsLoading] = useState(false);
-  const [db, setDb] = useState();
-
-  useEffect(() => initializeSqlite(), []);
-
-  const initializeSqlite = async () => {
-    setIsLoading(true);
-    const initSqlite = initSqlJs({ locateFile: (file) => `/${file}` });
-    const fetchBuffer = fetch("/database.db").then((res) => res.arrayBuffer());
-    const [sqlite, buffer] = await Promise.all([initSqlite, fetchBuffer]);
-    const db = new sqlite.Database(new Uint8Array(buffer));
-    setDb(db);
-  };
+  const [isLoading, setIsLoading] = useState(true);
+  const [donations, setDonations] = useState([]);
 
   const fetchDonations = () => {
-    if (!db) return;
-    const [{ values }] = db.exec("SELECT * FROM donations");
-    setIsLoading(false);
-    return values;
+    Papa.parse("donations.csv", {
+      download: true,
+      complete: ({ data }) => {
+        setIsLoading(false);
+        setDonations(data);
+      },
+      error: () => setIsLoading(false),
+    });
   };
 
-  const donations = useMemo(() => fetchDonations(), [db]);
+  useEffect(() => fetchDonations(), []);
 
   const getMonthDonations = (donations, day) => {
     return (
       donations?.filter((donation) =>
-        dayjs(donation[2]).isSame(day, "month")
+        dayjs.unix(donation[1]).isSame(day, "month")
       ) ?? []
     );
   };
 
   const currentMonthDonations = useMemo(() => {
     return getMonthDonations(donations, selectedDay).reduce(
-      (sum, a) => sum + a[1],
+      (sum, a) => sum + parseFloat(a[0]),
       0
     );
   }, [donations, selectedDay]);
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
+        <span style={{ fontSize: 32 }}>
+          {`💰 ${currentMonthDonations.toFixed(2)}`}
+        </span>
+      </div>
       <DateCalendar
         readOnly
         defaultValue={currentDay}
@@ -94,13 +92,6 @@ const DonationCalendar = () => {
         slots={{ day: DayWithDonation }}
         slotProps={{ day: { donations } }}
       />
-      {
-        <div style={{ display: "flex", justifyContent: "center" }}>
-          <span style={{ fontSize: 16 }}>
-            {`💰 ${currentMonthDonations.toFixed(2)}`}
-          </span>
-        </div>
-      }
     </LocalizationProvider>
   );
 };

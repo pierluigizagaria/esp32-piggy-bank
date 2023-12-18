@@ -3,23 +3,21 @@
 #include <AudioLibs/AudioSourceSD.h>
 #include <AudioCodecs/CodecMP3Helix.h>
 #include <DNSServerAsync.h>
-#include <LittleFS.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <RTClib.h>
-#include <ESP32Time.h>
 #include <TickTwo.h>
-#include <sqlite3.h>
+#include <LittleFS.h>
 
-#define MAX_FILES 32
-#define MAX_FILE_PATH_LENGTH 128
+#define MAX_FILES 8
+#define MAX_FILE_PATH_LENGTH 32
 #define MAX_COIN_TYPES 6
 #define COIN_SIGNAL_LENGTH 50
 #define COIN_SIGNAL_TOLLERANCE 5
 #define COIN_SIGNAL_PAUSE_LENGTH 100 + 10
 
 #define COIN_SOUND_FOLDER_PATH "/sound/coin"
-#define DATABASE_PATH "/sd/database.db"
+#define DONATIONS_FILE "/donations.csv"
 
 float coinValues[MAX_COIN_TYPES] = {2, 1.0, 0.50, 0.20, 0.10, 0.05};
 
@@ -37,7 +35,6 @@ AsyncWebServer web(80);
 AsyncWebSocket ws("/ws");
 
 RTC_DS3231 rtc;
-ESP32Time espRTC(3600);
 
 class CaptiveRequestHandler : public AsyncWebHandler
 {
@@ -53,26 +50,21 @@ public:
   void handleRequest(AsyncWebServerRequest *request)
   {
     String url = request->url();
-
     if (url == "/")
-      return request->send(LittleFS, "/index.html", "text/html");
-
-    if (LittleFS.exists(url) || SD.exists(url))
+      request->send(LittleFS, "/index.html", "text/html");
+    else if (LittleFS.exists(url) || SD.exists(url))
     {
       AsyncWebServerResponse *response;
-
       if (LittleFS.exists(url))
         response = request->beginResponse(LittleFS, url);
       else
         response = request->beginResponse(SD, url);
-
       if (request->url().endsWith(".wasm"))
         response->setContentType("application/wasm");
-
-      return request->send(response);
+      request->send(response);
     }
-
-    request->redirect("/");
+    else
+      request->redirect("/");
   }
 };
 
@@ -99,7 +91,6 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
   {
     DateTime dt(message);
     rtc.adjust(dt);
-    espRTC.setTime(rtc.now().unixtime());
   }
 }
 
@@ -127,36 +118,12 @@ void notifyCurrentDateTime()
   char data[128];
   StaticJsonDocument<JSON_OBJECT_SIZE(2)> doc;
   doc["type"] = "CurrentDateTime";
-  doc["message"] = espRTC.getTime("%d-%m-%Y %H:%M:%S");
+  doc["message"] = rtc.now().unixtime();
   size_t len = serializeJson(doc, data);
   ws.textAll(data, len);
 }
 
 TickTwo notifyDateTimeTicker(notifyCurrentDateTime, 1000, 0, MILLIS);
-sqlite3 *db;
-char sql[512], *sqlError;
-
-static int callback(void *data, int argc, char **argv, char **azColName)
-{
-  for (int i = 0; i < argc; i++)
-  {
-    Serial.printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
-  }
-  Serial.printf("\n");
-  return 0;
-}
-
-int db_exec(sqlite3 *db, const char *sql)
-{
-  Serial.printf("SQL query: %s\n", sql);
-  int rc = sqlite3_exec(db, sql, callback, (void *)NULL, &sqlError);
-  if (rc != SQLITE_OK)
-  {
-    Serial.printf("SQL error: %s\n", sqlError);
-    sqlite3_free(sqlError);
-  }
-  return rc;
-}
 
 int loadFiles(const char *path, char files[MAX_FILES][MAX_FILE_PATH_LENGTH], int &count)
 {
@@ -217,42 +184,49 @@ void IRAM_ATTR coinInterrupt()
   coinPulses++;
 }
 
-void coinDetected(int coin)
+void saveDonation(int coin)
 {
-  Serial.printf("Detected coin: %d\n", coin);
-
-  playCoinSound(coin);
-
-  float amount = coinValues[coin - 1];
-  const char *date = espRTC.getTime("%Y-%m-%d %H:%M:%S").c_str();
-  sprintf(sql, "INSERT INTO donations (amount, time) VALUES( %f, \'%s\');", amount, date);
-
-  db_exec(db, sql);
+  File donationsFile = SD.open(DONATIONS_FILE, FILE_APPEND);
+  if (!donationsFile)
+    return;
+  donationsFile.printf("\n%f;%d;", coinValues[coin - 1], rtc.now().unixtime());
+  donationsFile.close();
 }
 
 void checkCoinSignalEnd()
 {
   if ((coinPulses > 0) && (millis() - lastLowSignal > COIN_SIGNAL_LENGTH) && (millis() - lastHighSignal > COIN_SIGNAL_PAUSE_LENGTH))
   {
-    coinDetected(coinPulses);
+    Serial.printf("Detected coin: %d\n", coinPulses);
+    playCoinSound(coinPulses);
+    saveDonation(coinPulses);
     coinPulses = 0;
   }
 }
+
+void printHeapStatus()
+{
+  auto freeHeap = esp_get_free_heap_size();
+  auto minHeap = esp_get_minimum_free_heap_size();
+  Serial.printf("[HEAP] free:%i, minimum:%i\n", freeHeap, minHeap);
+}
+
+TickTwo printHeapStatusTicker(printHeapStatus, 5000, 0, MILLIS);
 
 void setup()
 {
   Serial.begin(115200);
   AudioLogger::instance().begin(Serial, AudioLogger::Info);
 
-  decoder.begin();
-
   auto cfg = kit.defaultConfig(TX_MODE);
   cfg.sd_active = true;
-  kit.setVolume(100);
   kit.begin(cfg);
 
   SD.begin(PIN_AUDIO_KIT_SD_CARD_CS, AUDIOKIT_SD_SPI);
   LittleFS.begin();
+
+  kit.setVolume(90);
+  decoder.begin();
 
   AudioActions &actions = kit.audioActions();
   actions.setEnabled(PIN_KEY6, false);
@@ -265,14 +239,10 @@ void setup()
   {
     Serial.println("Could not find RTC module");
   }
-  else
-  {
-    espRTC.setTime(rtc.now().unixtime());
-  }
 
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(apIP, apIP, subnet);
-  WiFi.softAP("PIGGY BANK");
+  WiFi.softAP("PIGGY BANK", "apritisesamo");
 
   dnsServer.start(DNS_PORT, "*", apIP);
 
@@ -281,23 +251,23 @@ void setup()
   web.addHandler(new CaptiveRequestHandler()).setFilter(ON_AP_FILTER);
   web.begin();
 
-  // sqlite3_initialize();
-  // if (sqlite3_open(DATABASE_PATH, &db) != SQLITE_OK)
-  // {
-  //   Serial.printf("Can't open database: %s\n", sqlite3_errmsg(db));
-  // }
-
-  srand(espRTC.getLocalEpoch());
+  srand(rtc.now().unixtime());
   playCoinSound(1);
 
+  printHeapStatusTicker.start();
   notifyDateTimeTicker.start();
 }
 
 void loop()
 {
+
   kit.processActions();
-  copier.copy();
   ws.cleanupClients();
+  printHeapStatusTicker.update();
   notifyDateTimeTicker.update();
   checkCoinSignalEnd();
+  if (!copier.copy() && audioFile)
+  {
+    audioFile.close();
+  }
 }

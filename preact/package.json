@@ -12,8 +12,8 @@
 		"@mui/material": "^5.15.0",
 		"@mui/x-date-pickers": "^6.18.4",
 		"dayjs": "^1.11.10",
-		"preact": "^10.13.1",
-		"sql.js": "^1.9.0"
+		"papaparse": "^5.4.1",
+		"preact": "^10.13.1"
 	},
 	"devDependencies": {
 		"@preact/preset-vite": "^2.5.0",
