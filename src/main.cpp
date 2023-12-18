@@ -263,8 +263,6 @@ void setup()
   web.begin();
 
   srand(rtc.now().unixtime());
-  playCoinSound(1);
-
   printHeapStatusTicker.start();
   notifyDateTimeTicker.start();
 }
