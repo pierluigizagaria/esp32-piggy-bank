@@ -54,14 +54,10 @@ public:
       request->send(LittleFS, "/index.html", "text/html");
     else if (LittleFS.exists(url) || SD.exists(url))
     {
-      AsyncWebServerResponse *response;
       if (LittleFS.exists(url))
-        response = request->beginResponse(LittleFS, url);
+        request->send(LittleFS, url);
       else
-        response = request->beginResponse(SD, url);
-      if (request->url().endsWith(".wasm"))
-        response->setContentType("application/wasm");
-      request->send(response);
+        request->send(SD, url);
     }
     else
       request->redirect("/");
