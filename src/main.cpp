@@ -85,11 +85,11 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
   }
 
   const char *type = doc["type"];
-  const char *message = doc["message"];
 
   if (strcmp(type, "UpdateDateTime") == 0)
   {
-    DateTime dt(message);
+    uint32_t timestamp = doc["message"];
+    DateTime dt(timestamp);
     rtc.adjust(dt);
   }
 }
