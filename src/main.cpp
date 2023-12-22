@@ -10,7 +10,7 @@
 #include <LittleFS.h>
 
 #define MAX_FILES 8
-#define MAX_FILE_PATH_LENGTH 32
+#define MAX_FILE_PATH_LENGTH 64
 #define MAX_COIN_TYPES 6
 #define COIN_SIGNAL_LENGTH 50
 #define COIN_SIGNAL_TOLLERANCE 5
@@ -134,18 +134,18 @@ TickTwo notifyDateTimeTicker(notifyCurrentDateTime, 1000, 0, MILLIS);
 int loadFiles(const char *path, char files[MAX_FILES][MAX_FILE_PATH_LENGTH], int &count)
 {
   File directory = SD.open(path);
-
   if (!directory.isDirectory())
     return -1;
-
   count = 0;
   while (File entry = directory.openNextFile())
   {
     if (!entry.isDirectory())
     {
-      if (count < MAX_FILES)
+      const char *path = entry.path();
+      const int length = strlen(path);
+      if (count < MAX_FILES || length < MAX_FILE_PATH_LENGTH)
       {
-        strcpy(files[count], entry.path());
+        strcpy(files[count], path);
         count++;
       }
     }
