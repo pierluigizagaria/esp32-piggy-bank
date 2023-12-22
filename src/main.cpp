@@ -168,6 +168,9 @@ void playCoinSound(int coin)
   for (int i = 0; i < count; i++)
     Serial.printf("%d. %s\n", i, files[i]);
 
+  if (audioFile)
+    audioFile.close();
+
   audioFile = SD.open(files[rand() % count]);
   copier.begin(decoder, audioFile);
 }
@@ -265,13 +268,10 @@ void setup()
 
 void loop()
 {
+  copier.copy();
   kit.processActions();
   ws.cleanupClients();
   printHeapStatusTicker.update();
   notifyDateTimeTicker.update();
   checkCoinSignalEnd();
-  if (!copier.copy() && audioFile)
-  {
-    audioFile.close();
-  }
 }
